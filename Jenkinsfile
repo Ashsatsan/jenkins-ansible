@@ -1,121 +1,91 @@
 pipeline {
-    
-	agent any
-/*	
-	tools {
-        maven "maven3"
+    agent any 
+    tools {
+        maven 'maven3'
+        jdk 'openjdk-11'
     }
-*/	
     environment {
-        NEXUS_VERSION = "nexus3"
-        NEXUS_PROTOCOL = "http"
-        NEXUS_URL = "172.31.40.209:8081"
-        NEXUS_REPOSITORY = "vprofile-release"
-	NEXUS_REPOGRP_ID    = "vprofile-grp-repo"
-        NEXUS_CREDENTIAL_ID = "nexuslogin"
-        ARTVERSION = "${env.BUILD_ID}"
+        // Project-specific variables from Jenkins environment
+        SONAR_PROJECT_VERSION = "1.0"
+        SONAR_SOURCES = "src/"
+        SONAR_BINARIES = "target/classes"
+        SONAR_PROJECT_KEY = "${env.SONAR_PROJECT_KEY}"
+        SONAR_PROJECT_NAME = "${env.SONAR_PROJECT_NAME}"
+        SONAR_SERVER = "sonarserver"
+        SONAR_SCANNER = "sonarscanner"
+        NEXUS_USER = "${env.NEXUS_USER}"
+        NEXUS_PASS = "${env.NEXUS_PASS}"
+        NEXUSIP = "${env.NEXUSIP}"
+        NEXUSPORT = "${env.NEXUSPORT}"
+        NEXUS_GRP_REPO = "${env.NEXUS_GRP_REPO}"
+        SNAP_REPO = "${env.SNAP_REPO}"
+        RELEASE_REPO = "proj-host-release"
     }
-	
-    stages{
-        
-        stage('BUILD'){
+
+    stages {
+        stage('Build Artifact') {
             steps {
-                sh 'mvn clean install -DskipTests'
+                sh 'mvn install -DskipTests'
             }
             post {
                 success {
-                    echo 'Now Archiving...'
-                    archiveArtifacts artifacts: '**/target/*.war'
+                    archiveArtifacts artifacts: 'target/*.war'
                 }
             }
         }
-
-	stage('UNIT TEST'){
+        
+        stage('Test the Artifact') {
             steps {
                 sh 'mvn test'
             }
         }
 
-	stage('INTEGRATION TEST'){
-            steps {
-                sh 'mvn verify -DskipUnitTests'
-            }
-        }
-		
-        stage ('CODE ANALYSIS WITH CHECKSTYLE'){
+        stage('Checkstyle') {
             steps {
                 sh 'mvn checkstyle:checkstyle'
             }
-            post {
-                success {
-                    echo 'Generated Analysis Result'
-                }
-            }
         }
 
-        stage('CODE ANALYSIS with SONARQUBE') {
-          
-		  environment {
-             scannerHome = tool 'sonarscanner4'
-          }
-
-          steps {
-            withSonarQubeEnv('sonar-pro') {
-               sh '''${scannerHome}/bin/sonar-scanner -Dsonar.projectKey=vprofile \
-                   -Dsonar.projectName=vprofile-repo \
-                   -Dsonar.projectVersion=1.0 \
-                   -Dsonar.sources=src/ \
-                   -Dsonar.java.binaries=target/test-classes/com/visualpathit/account/controllerTest/ \
-                   -Dsonar.junit.reportsPath=target/surefire-reports/ \
-                   -Dsonar.jacoco.reportsPath=target/jacoco.exec \
-                   -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml'''
+        stage('SonarQube Analysis') {
+            environment {
+                scannerHome = tool "${SONAR_SCANNER}"
             }
-
-            timeout(time: 10, unit: 'MINUTES') {
-               waitForQualityGate abortPipeline: true
-            }
-          }
-        }
-
-        stage("Publish to Nexus Repository Manager") {
             steps {
-                script {
-                    pom = readMavenPom file: "pom.xml";
-                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}");
-                    echo "${filesByGlob[0].name} ${filesByGlob[0].path} ${filesByGlob[0].directory} ${filesByGlob[0].length} ${filesByGlob[0].lastModified}"
-                    artifactPath = filesByGlob[0].path;
-                    artifactExists = fileExists artifactPath;
-                    if(artifactExists) {
-                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version} ARTVERSION";
-                        nexusArtifactUploader(
-                            nexusVersion: NEXUS_VERSION,
-                            protocol: NEXUS_PROTOCOL,
-                            nexusUrl: NEXUS_URL,
-                            groupId: NEXUS_REPOGRP_ID,
-                            version: ARTVERSION,
-                            repository: NEXUS_REPOSITORY,
-                            credentialsId: NEXUS_CREDENTIAL_ID,
-                            artifacts: [
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: artifactPath,
-                                type: pom.packaging],
-                                [artifactId: pom.artifactId,
-                                classifier: '',
-                                file: "pom.xml",
-                                type: "pom"]
-                            ]
-                        );
-                    } 
-		    else {
-                        error "*** File: ${artifactPath}, could not be found";
-                    }
+                withSonarQubeEnv("${SONAR_SERVER}") {
+                    sh '''${scannerHome}/bin/sonar-scanner \
+                        -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                        -Dsonar.projectName=${SONAR_PROJECT_NAME} \
+                        -Dsonar.projectVersion=${SONAR_PROJECT_VERSION} \
+                        -Dsonar.sources=${SONAR_SOURCES} \
+                        -Dsonar.java.binaries=${SONAR_BINARIES} \
+                        -Dsonar.junit.reportPaths=target/surefire-reports \
+                        -Dsonar.jacoco.reportPaths=target/jacoco.exec \
+                        -Dsonar.java.checkstyle.reportPaths=target/checkstyle-result.xml
+                    '''
                 }
             }
         }
 
-
+        stage('Nexus Artifact Uploader') {
+            steps {
+                nexusArtifactUploader(
+                    nexusVersion: 'nexus3',
+                    protocol: 'http',
+                    nexusUrl: "${NEXUSIP}:${NEXUSPORT}",
+                    groupId: 'JA',
+                    version: "${env.BUILD_ID}",
+                    repository: "${RELEASE_REPO}",
+                    credentialsId: 'nexus-login', // Replace with your Jenkins credentials ID for Nexus
+                    artifacts: [
+                        [
+                            artifactId: "jenkans",
+                            classifier: '',
+                            file: "target/vprofile-v2.war",
+                            type: 'war'
+                        ]
+                    ]
+                )
+            }
+        }
     }
-
-
 }
